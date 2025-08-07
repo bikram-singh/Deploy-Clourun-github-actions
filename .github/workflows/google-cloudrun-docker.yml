@@ -1,0 +1,83 @@
+# This workflow builds and pushes a Docker container to Google Artifact Registry
+# and deploys it on Cloud Run when a commit is pushed to the "main" branch.
+#
+# To configure this workflow:
+#
+# 1. Enable the following Google Cloud APIs:
+#    - Artifact Registry (artifactregistry.googleapis.com)
+#    - Cloud Run (run.googleapis.com)
+#
+# 2. Create a Service Account with the following IAM roles:
+#    - Artifact Registry Administrator (roles/artifactregistry.admin)
+#    - Cloud Run Developer (roles/run.developer)
+#
+# 3. Generate a Service Account JSON key and store its contents
+#    as a GitHub Secret named "GCP_CREDENTIALS".
+#
+# 4. Update the values in the "env" block with your actual project settings.
+
+name: 'Build and Deploy to Cloud Run'
+
+on:
+  push:
+    branches:
+      - "main"
+
+env:
+  PROJECT_ID: 'github-actions-111'             # ✅ Update to your GCP project ID
+  REGION: 'us-central1'                        # ✅ Update to your GCP region
+  SERVICE: 'my-flask-app'                      # ✅ Update to your Cloud Run service name
+  REPOSITORY: 'github-action-artifact'         # ✅ Your Artifact Registry repo name
+
+jobs:
+  deploy:
+    runs-on: 'ubuntu-latest'
+
+    permissions:
+      contents: 'read'
+
+    steps:
+      - name: 'Checkout code'
+        uses: 'actions/checkout@v4'
+
+      # Authenticate using Service Account Key JSON from GitHub Secrets
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
+
+      ##########################################################
+      # Docker Auth using OAuth2 (commented out for reference) #
+      ##########################################################
+      # - name: 'Docker Auth'
+      #   uses: 'docker/login-action@v3'
+      #   with:
+      #     username: 'oauth2accesstoken'
+      #     password: '${{ steps.auth.outputs.access_token }}'
+      #     registry: '${{ env.REGION }}-docker.pkg.dev'
+
+      ##############################################################
+      # Alternative: Use gcloud to authenticate Docker to Artifact #
+      ##############################################################
+      - name: 'Configure Docker for Artifact Registry'
+        run: |-
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+  
+      # Docker auth and build
+
+      - name: 'Build and Push Container'
+        run: |-
+          DOCKER_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}"
+          docker build --tag "${DOCKER_TAG}" .
+          docker push "${DOCKER_TAG}"
+
+      - name: 'Deploy to Cloud Run'
+        uses: 'google-github-actions/deploy-cloudrun@v2'
+        with:
+          service: '${{ env.SERVICE }}'
+          region: '${{ env.REGION }}'
+          image: '${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}'
+
+      - name: 'Show Deployed URL'
+        run: echo "${{ steps.deploy.outputs.url }}"
